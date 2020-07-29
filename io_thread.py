@@ -4,11 +4,14 @@ import threading
 import logging
 
 import q_manager
+import s_manager
 
 async def session_broker():
+    logging.info('session_broker starting')
     loop = asyncio.get_running_loop()
     queue_key = 'session_broker'
     q_manager.create_queue(queue_key)
+    task_list = []
 
     def session_broker_get():
         return q_manager.get(queue_key)
@@ -18,15 +21,22 @@ async def session_broker():
                 None, # Run in default executor
                 session_broker_get)
 
-        logging.debug(('Received "%s" from queue "%s"' % (msg, queue_key)))
         if msg == q_manager.KILL: 
-            logging.info('Goodbye!')
+            await asyncio.gather(*task_list)
+            logging.info('session_broker stopped')
             break
 
+        args = msg.split()
+        if args[0] == 'start': 
+            task_list.append(
+                asyncio.create_task(s_manager.start_session(args[1], args[2])))
+        elif args[0] == 'end':
+            asyncio.create_task(s_manager.end_session(args[1]))
+
 async def start_io():
-    logging.info('Starting session_broker')
     await session_broker()
-    logging.info('Goodbye!')
+    logging.info('io_thread stopped')
     
 def main():
-    asyncio.run(start_io()),
+    logging.info('io_thread starting')
+    asyncio.run(start_io())

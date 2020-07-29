@@ -11,12 +11,10 @@ import q_manager
 from session_pass import session_pass
 
 async def start_session(uname, pwd):
-    logging.info('"%s" starting session' % uname)
     await __instance.start_session(uname, pwd)
 
 async def end_session(sid):
-    logging.info('"%s" ending session' % sid)
-    await __instance.close_session(sid)
+    await __instance.end_session(sid)
 
 class SessionManager:
     MAX_SESSIONS = 10;
@@ -30,6 +28,7 @@ class SessionManager:
         return cls.__instance
 
     async def start_session(self, uname, pwd):
+        logging.info('"%s" starting session' % uname)
         if self.open_sessions >= self.MAX_SESSIONS:
             logging.warning('MAX_SESSIONS reached. Session creation aborted')
             return
@@ -41,7 +40,8 @@ class SessionManager:
         del self.sessions[uname]
         self.open_sessions -= 1
 
-    async def close_session(self, sid):
+    async def end_session(self, sid):
+        logging.info('"%s" ending session' % sid)
         await self.sessions[sid].close()
 
     class __Session:
@@ -79,9 +79,7 @@ class SessionManager:
                 return 1
             except:
                 logging.error('"%s" unable to fetch session pass' % self.uname)
-                logging.debug(
-                    '"%s" raised exception' % self.uname,
-                    esc_info=True)
+                self.raise_exception()
 
         async def websocket_start(self):
             logging.info('"%s" opening websocket' % self.uname)
@@ -90,8 +88,8 @@ class SessionManager:
             except:
                 logging.error(
                         '"%s" unable to open websocket' % self.uname)
-                q_manager.put(self.recv_key, q_manager.KILL)
-                q_manager.put(self.send_key, q_manager.KILL)
+                self.raise_exception()
+                self.close()
             else:
                 logging.info('"%s" creating IO worker tasks' % self.uname)
                 await asyncio.gather(self.websocket_send(), self.websocket_recv())
@@ -126,6 +124,7 @@ class SessionManager:
                 except:
                     if not self.closing: await self.close()
                     logging.info('"%s" recv task stopped' % self.uname)
+                    self.raise_exception()
                     break
 
                 logging.info('"%s" recieved \'%s\'' % (self.uname, msg))
@@ -142,7 +141,11 @@ class SessionManager:
             try:
                 await self.ws.close()
             except:
-                logging.error('"%s" raised exception' % self.uname, exc_info=True)
+                self.raise_exception()
+
+        def raise_exception(self):
+            logging.debug('"%s" raised exception' % self.uname, exc_info=True)
+            
 
             
 __instance = SessionManager()
