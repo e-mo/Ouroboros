@@ -92,7 +92,7 @@ class SessionManager:
                 self.close()
             else:
                 logging.info('"%s" creating IO worker tasks' % self.uname)
-                await asyncio.gather(self.websocket_send(), self.websocket_recv())
+                await asyncio.gather(self.websocket_recv(), self.websocket_send())
                  
         async def websocket_send(self):
             q_manager.put(self.send_key, self.CLIENT_STRING)
