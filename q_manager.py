@@ -5,9 +5,6 @@ import logging
 ASYNC_TIMEOUT = 0.02
 KILL = 'KILL'
 
-def create_queue(key):
-    __instance.create_queue(key)
-
 def put(key, item):
     __instance.put(key, item)
 
@@ -26,13 +23,17 @@ class QueueManager:
             cls.__instance.queue_register = {}
         return cls.__instance
 
-    def create_queue(self, key):
+    def __create_queue(self, key):
         self.queue_register[key] = queue.Queue()
 
     def put(self, key, item):
+        if key not in self.queue_register:
+            self.__create_queue(key)
         self.queue_register[key].put(item)
-
+            
     def get(self, key):
+        if key not in self.queue_register:
+            self.__create_queue(key)
         msg = self.queue_register[key].get()
         return msg
 
