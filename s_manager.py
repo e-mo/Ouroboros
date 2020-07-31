@@ -4,7 +4,6 @@ import threading
 import asyncio
 import concurrent.futures
 import websockets
-import hashlib
 from functools import partial 
 
 import q_manager
@@ -31,18 +30,21 @@ class SessionManager:
         logging.info('"%s" starting session' % uname)
         if self.open_sessions >= self.MAX_SESSIONS:
             logging.warning('MAX_SESSIONS reached. Session creation aborted')
-            return
-        session = self.__Session(uname, pwd)
+        else:
+            session = self.__Session(uname, pwd)
 
-        self.open_sessions += 1
-        self.sessions[uname] = session
-        await session.start()
-        del self.sessions[uname]
-        self.open_sessions -= 1
+            self.open_sessions += 1
+            self.sessions[uname] = session
+
+            await session.start()
+
+            del self.sessions[uname]
+            self.open_sessions -= 1
 
     async def end_session(self, sid):
         logging.info('"%s" ending session' % sid)
         await self.sessions[sid].close()
+
 
     class __Session:
         URI = "ws://game.eternalcitygame.com:8080/tec"
@@ -50,8 +52,6 @@ class SessionManager:
         closing = False
         
         def __init__(self, uname, pwd):
-            self.send_key = ('%s_send' % uname)
-            self.recv_key = ('%s_recv' % uname)
             self.uname  = uname
             self.pwd = pwd
 
@@ -98,7 +98,7 @@ class SessionManager:
             q_manager.put(self.send_key, self.CLIENT_STRING)
 
             def websocket_send_get():
-                return q_manager.get(self.send_key)
+                return q_manager.get(self.uname)
             
             executor = concurrent.futures.ThreadPoolExecutor(
                 max_workers=1)
@@ -128,7 +128,7 @@ class SessionManager:
                     break
 
                 logging.info('"%s" recieved \'%s\'' % (self.uname, msg))
-                q_manager.put(self.recv_key, msg)
+                # send to parser here
 
         async def close(self):
             self.closing = True # No need to run this multiple times
@@ -161,8 +161,6 @@ if __name__ == '__main__':
             exit()
         uname = sys.argv[1]
         pwd = sys.argv[2]
-        q_manager.create_queue('%s_recv' % uname)
-        q_manager.create_queue('%s_send' % uname)
         asyncio.create_task(start_session(uname, pwd))
         await asyncio.sleep(15)
         await end_session(uname)
