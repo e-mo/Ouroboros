@@ -1,4 +1,4 @@
-# session_pass.py
+# s_pass.py
 import requests
 import logging
 
@@ -9,7 +9,7 @@ def construct_payload(uname, pwd):
         'pwd': pwd
     }
 
-def session_pass(uname, pwd):
+def fetch_pass(uname, pwd):
     url = 'https://login.eternalcitygame.com/login.php'
     payload = construct_payload(uname, pwd)
     session = requests.Session()

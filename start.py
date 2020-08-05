@@ -9,7 +9,7 @@ def configure_logger():
     format_str = '\
 %(asctime)s %(filename)s %(funcName)s\n\
 %(levelname)-7s %(message)s'
-    logging.basicConfig(format=format_str, level=logging.INFO)
+    logging.basicConfig(format=format_str, level=logging.DEBUG)
 
 def main():
     configure_logger()
@@ -23,9 +23,9 @@ def main():
 
     # Tell all the consumer threads to stop. 
     logging.debug('Sending KILL message to all consumers')
-    q_manager.put_all(q_manager.KILL)
-    logging.info('Goodbye!')
+    q_manager.kill_all() 
     iot.join()
+    logging.info('Goodbye!')
 
 if __name__ == '__main__':
     main()

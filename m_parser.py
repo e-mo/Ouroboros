@@ -1,15 +1,20 @@
 # m_parser.py
 import asyncio
+import logging
 
 import m_server
 
 async def parse_message(session, msg):
-    sorted_msg = sort_message(msg)
-    await m_server.distribute(session, sorted_msg)
-    await m_server.subscribe('poop', 'moyalinka', 'raw')
+    logging.info('"%s" parsing msg \'%s\'' % (session, msg))
+    parsed_msg = __parse(msg)
+    await m_server.distribute(session, parsed_msg)
 
-def sort_message(msg):
-    return {'raw': msg, 'skoot': 'map stuff'}
+def __parse(msg):
+    parsed_msg = {'raw': msg}
+    lines = msg.decode().split('\r\n')
+    print(lines)
+    return parsed_msg
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(parse_message('moyalinka', 'meow time baby'))

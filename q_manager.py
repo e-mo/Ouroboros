@@ -3,7 +3,7 @@ import queue
 import logging
 
 ASYNC_TIMEOUT = 0.02
-KILL = 'KILL'
+KILL = 'kill'
 
 def put(key, item):
     __instance.put(key, item)
@@ -11,8 +11,11 @@ def put(key, item):
 def get(key):
     return __instance.get(key)
 
-def put_all(item):
-    __instance.put_all(item)
+def kill(session):
+    __instance.put(session, KILL)
+
+def kill_all():
+    __instance.put_all(KILL)
 
 class QueueManager:
     __instance = None
