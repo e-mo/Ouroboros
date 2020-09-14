@@ -5,11 +5,23 @@ import queue
 
 import q_manager
 
+KILL = 'kill'
+
 async def distribute(session, parsed_msg):
     await __instance.distribute(session, parsed_msg)
 
-async def subscribe(sub_id, session, msg_type):
-    await __instance.subscribe(sub_id, session, msg_type)
+def subscribe(subscriber):
+    __instance.subscribe(subscriber)
+    
+def unsubscribe(subscriber):
+    __instance.unsubscribe(subscriber)
+
+async def end_distribution(session):
+    await __instance.end_distribution(session)
+
+async def end_all():
+    await __instance.end_all()
+
 
 class MessageServer:
     __instance = None
@@ -24,16 +36,30 @@ class MessageServer:
         self.ensure_distributor(session)
         await self.distributors[session].distribute(parsed_msg)
 
-    async def subscribe(self, sub_id, session, msg_type):
-        self.ensure_distributor(session)
-        await self.distributors[session].subscribe(
-            sub_id, msg_type)
+    def subscribe(self, subscriber):
+        self.ensure_distributor(subscriber.session)
+        self.distributors[subscriber.session].subscribe(subscriber)
+
+    def unsubscribe(self, subscriber):
+        self.distributors[subscriber.session].unsubscribe(subscriber)
+
+    async def end_distribution(self, session):
+        if session in self.distributors:
+            logging.info('"%s" ending distribution' % session)
+            await self.distributors[session].end()
+            del self.distributors[session]
+        else: 
+            logging.warning('no "%s" distributor' % session)
+
+    async def end_all(self):
+        logging.info('ending all distribution')
+        for session in list(self.distributors):
+            await self.end_distribution(session)
 
     def ensure_distributor(self, session):
         if session not in self.distributors:
             logging.info('"%s" creating distributor' % session)
             self.distributors[session] = Distributor(session)
-
 
 class Distributor:
 
@@ -47,54 +73,96 @@ class Distributor:
         logging.info('"%s" distributing sorted msg %s'
             % (self.session, str(parsed_msg))) 
 
-        for msg_type, msg in parsed_msg.items():
-            await self.ensure_queue(msg_type)
-            await self.queues[msg_type].put(msg)
+        for m_type, msg in parsed_msg.items():
+            await self.ensure_queue(m_type)
+            await self.queues[m_type].put(msg)
 
-    async def ensure_queue(self, msg_type):
-        if msg_type not in self.queues:
+    async def end(self):
+        for queue in self.queues.values():
+            await queue.put(KILL)
+
+    async def ensure_queue(self, m_type):
+        if m_type not in self.queues:
             logging.info('"%s" creating %s queue and distribution task'
-                % (self.session, msg_type))
-            self.queues[msg_type] = asyncio.Queue()
-            self.backlogs[msg_type] = queue.Queue()
-            self.start_dist_task(msg_type)
+                % (self.session, m_type))
+            self.queues[m_type] = asyncio.Queue()
+            self.start_dist_task(m_type)
 
-    def start_dist_task(self, msg_type):
-        return asyncio.create_task(self.distribution_task(msg_type))
+    def start_dist_task(self, m_type):
+        return asyncio.create_task(self.distribution_task(m_type))
 
-    async def distribution_task(self, msg_type):
+    async def distribution_task(self, m_type):
         while True:
-            msg = await self.queues[msg_type].get()
-            try:
-                for sub_id in self.subscribers[msg_type]:
-                    logging.info('"%s" distributing \'%s\' -> \'%s\''
-                        % (self.session, msg, sub_id))
-                    q_key = ('%s%s%s' % (self.session, msg_type, sub_id))
-                    q_manager.put(q_key, msg)
-            except KeyError:
-                logging.info(
-                    '"%s" no subscribers to %s. Backlogging \'%s\''
-                    % (self.session, msg_type, msg))
-                self.backlogs[msg_type].put(msg)
+            msg = await self.queues[m_type].get()
 
-    async def subscribe(self, sub_id, msg_type):
-        if msg_type not in self.subscribers:
-            logging.info('"%s" received new %s subscriber \'%s\''
-                % (self.session, msg_type, sub_id))
-            self.subscribers[msg_type] = [sub_id]
-        else: self.subscribers[msg_type].append(sub_id)
-        self.flush_backlog(sub_id, msg_type)
+            if msg == q_manager.KILL:
+                break
 
-    async def backlog(self, msg_type, msg):
-        logging.info('backlog found')
-        await self.backlogs[msg_type].put(msg)
+            await self.distribute_msg(msg, m_type)
+            
+        logging.info('"%s" %s distribution task stopped'
+            % (self.session, m_type))
 
-    def flush_backlog(self, sub_id, msg_type):
-        q_key = ('%s%s%s' % (self.session, msg_type, sub_id))
-        while not self.backlogs[msg_type].empty():
-            msg = self.backlogs[msg_type].get()
+    async def distribute_msg(self, msg, m_type):
+        self.ensure_subscribers(m_type)
+        if self.subscribers[m_type]:
+            self.flush_backlog(m_type)
+            for subscriber in self.subscribers[m_type]:
+                await self.send_msg(subscriber, msg)
+        elif msg is not q_manager.KILL:
+            self.backlog_msg(msg, m_type)
+
+    def backlog_msg(self, msg, m_type):
+        logging.info(
+            '"%s" no subscribers to %s. BACKLOGGING \'%s\''
+            % (self.session, m_type, msg))
+        self.ensure_backlog(m_type)
+        self.backlogs[m_type].put(msg)
+
+    def ensure_backlog(self, m_type):
+        if m_type not in self.backlogs:
+            logging.info('"%s" creating %s backlog' % (self.session, m_type))
+            self.backlogs[m_type] = queue.Queue()
+
+    async def send_msg(self, subscriber, msg):
+        logging.info('"%s" sending \'%s\' -> \'%s\''
+            % (self.session, msg, id(subscriber)))
+        subscriber.send(msg)
+
+    def q_key(self, sub_id):
+        return '%s %s' % (self.session, sub_id)
+
+    def subscribe(self, subscriber):
+        self.ensure_subscribers(subscriber.m_type)
+
+        logging.info('"%s" received new %s subscriber \'%s\''
+            % (self.session, subscriber.m_type, id(subscriber)))
+        self.subscribers[subscriber.m_type].append(subscriber)
+
+        
+    def unsubscribe(self, subscriber):
+        self.ensure_subscribers(subscriber.m_type)
+        if subscriber in self.subscribers[subscriber.m_type]:
+            logging.info('"%s" removed %s subscriber \'%s\''
+                % (self.session, subscriber.m_type, id(subscriber)))
+            self.subscribers[subscriber.m_type].remove(subscriber) 
+        else:
+            logging.warning('"%s" no %s subscriber \'%s\''
+                % (self.session, subscriber.m_type, id(subscriber)))
+
+    def ensure_subscribers(self, m_type):
+        if m_type not in self.subscribers:
+            logging.info('"%s" creating %s subscribers list' 
+                % (self.session, m_type))
+            self.subscribers[m_type] = []
+
+    def flush_backlog(self, m_type):
+        self.ensure_backlog(m_type)
+
+        while not self.backlogs[m_type].empty():
+            msg = self.backlogs[m_type].get()
             logging.info('"%s" flushing %s from backlog'
                 % (self.session, msg))
-            self.queues[msg_type].put_nowait(msg)
+            self.queues[m_type].put_nowait(msg)
 
 __instance = MessageServer()

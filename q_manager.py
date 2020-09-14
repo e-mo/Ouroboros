@@ -5,17 +5,25 @@ import logging
 ASYNC_TIMEOUT = 0.02
 KILL = 'kill'
 
-def put(key, item):
-    __instance.put(key, item)
+def put(key, msg):
+    __instance.put(key, msg)
 
 def get(key):
     return __instance.get(key)
 
+def get_nowait(key):
+    return __instance.get(key, wait=False)
+
 def kill(session):
-    __instance.put(session, KILL)
+    for queue in __instance.queue_register:
+        if queue.startswith(session):
+            __instance.put(queue, KILL)
 
 def kill_all():
     __instance.put_all(KILL)
+
+def exists(key):
+    return __instance.exists(key)
 
 class QueueManager:
     __instance = None
@@ -27,21 +35,34 @@ class QueueManager:
         return cls.__instance
 
     def __create_queue(self, key):
+        logging.info('creating queue "%s"' % key)
         self.queue_register[key] = queue.Queue()
 
-    def put(self, key, item):
+    def put(self, key, msg):
+        #logging.info('putting \'%s\' --> "%s"' % (msg, key))
+        logging.info('putting --> "%s"' % key)
         if key not in self.queue_register:
             self.__create_queue(key)
-        self.queue_register[key].put(item)
+        self.queue_register[key].put(msg)
             
-    def get(self, key):
+    def get(self, key, wait=True):
+        logging.info('getting <-- "%s"' % key)
         if key not in self.queue_register:
             self.__create_queue(key)
-        msg = self.queue_register[key].get()
+        if wait:
+            msg = self.queue_register[key].get()
+        else:
+            try:
+                msg = self.queue_register[key].get_nowait()
+            except queue.Empty:
+                msg = None
         return msg
 
-    def put_all(self, item):
-        for q in self.queue_register.values():
-            q.put(item)
+    def put_all(self, msg):
+        for key in self.queue_register:
+            self.put(key, msg)
+
+    def exists(self, key):
+        return key in self.queue_register
 
 __instance = QueueManager()

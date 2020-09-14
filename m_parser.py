@@ -12,7 +12,6 @@ async def parse_message(session, msg):
 def __parse(msg):
     parsed_msg = {'raw': msg}
     lines = msg.decode().split('\r\n')
-    print(lines)
     return parsed_msg
 
 if __name__ == '__main__':

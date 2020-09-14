@@ -1,8 +1,8 @@
 # s_manager.py
 import logging
 import threading
-import asyncio
 import concurrent.futures
+import asyncio
 import websockets
 from functools import partial 
 
@@ -10,11 +10,19 @@ import q_manager
 import s_pass
 import m_parser
 
+KILL = 'kill'
+
 async def start_session(uname, pwd):
     await __instance.start_session(uname, pwd)
 
-async def end_session(sid):
-    await __instance.end_session(sid)
+async def end_session(session):
+    await __instance.end_session(session)
+
+async def end_all():
+    await __instance.end_all()
+
+def send(session, msg):
+    q_manager.put(session, msg)
 
 class SessionManager:
     MAX_SESSIONS = 10;
@@ -42,32 +50,40 @@ class SessionManager:
             del self.sessions[uname]
             self.open_sessions -= 1
 
-    async def end_session(self, sid):
-        logging.info('"%s" ending session' % sid)
-        await self.sessions[sid].close()
+    async def end_session(self, session):
+        if session in self.sessions:
+            logging.info('"%s" ending session' % session)
+            await self.sessions[session].close()
+        else:
+            logging.warning('no "%s" session' % session)
 
-
+    async def end_all(self):
+        
+        logging.info('ending all sessions')
+        for session in self.sessions:
+            await self.end_session(session)
+        
 class Session:
     URI = "ws://game.eternalcitygame.com:8080/tec"
     CLIENT_STRING = 'SKOTOS Orchil 0.2.3'
     closing = False
     
     def __init__(self, uname, pwd):
-        self.uname  = uname
+        self.session  = uname
         self.pwd = pwd
 
     async def start(self):
         if await self.fetch_session_pass():
             if self.pwd == None:
                 logging.error(
-                   '"%s" no session pass returned' % self.uname)
+                   '"%s" no session pass returned' % self.session)
             elif not self.closing:
                 await self.websocket_start()
 
-        logging.info('"%s" session ended' % self.uname)
+        logging.info('"%s" session ended' % self.session)
 
     async def fetch_session_pass(self):
-        logging.info('"%s" fetching session pass' % self.uname)
+        logging.info('"%s" fetching session pass' % self.session)
 
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1)
@@ -76,32 +92,34 @@ class Session:
         try:
             self.pwd = await loop.run_in_executor(
                 executor, 
-                partial(s_pass.fetch_pass, self.uname, self.pwd))
+                partial(s_pass.fetch_pass, self.session, self.pwd))
             return 1
         except:
-            logging.error('"%s" unable to fetch session pass' % self.uname)
+            logging.error('"%s" unable to fetch session pass' % self.session)
             self.raise_exception()
 
     async def websocket_start(self):
-        logging.info('"%s" opening websocket' % self.uname)
+        logging.info('"%s" opening websocket' % self.session)
         try:
             self.ws = await websockets.connect(self.URI)
         except:
             logging.error(
-                    '"%s" unable to open websocket' % self.uname)
+                    '"%s" unable to open websocket' % self.session)
             self.raise_exception()
-            self.close()
+            await self.close()
         else:
             if not self.closing:
-                logging.info('"%s" creating IO worker tasks' % self.uname)
+                logging.info('"%s" creating IO worker tasks' % self.session)
                 await asyncio.gather(
-                    self.websocket_recv(), self.websocket_send())
+                    self.recv_task(), self.send_task())
+            else:
+                await self.close()
              
-    async def websocket_send(self):
-        q_manager.put(self.uname, self.CLIENT_STRING)
+    async def send_task(self):
+        send(self.session, self.CLIENT_STRING)
 
         def websocket_send_get():
-            return q_manager.get(self.uname)
+            return q_manager.get(self.session)
         
         executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1)
@@ -111,33 +129,35 @@ class Session:
                 executor, 
                 websocket_send_get)
 
-            if msg == q_manager.KILL: 
+            if msg == KILL: 
                 if not self.closing: await self.close()
-                logging.info('"%s" send task stopped' % self.uname)
                 break
 
             msg = ('%s\n' % msg).encode()
             await self.ws.send(msg)
-            logging.info('"%s" sending \'%s\'' % (self.uname, msg))
+            logging.info('"%s" sent \'%s\'' % (self.session, msg))
 
-    async def websocket_recv(self):
+        logging.info('"%s" send task stopped' % self.session)
+
+    async def recv_task(self):
         while True:
             try:
                 msg = await self.ws.recv()
             except:
                 if not self.closing: await self.close()
-                logging.info('"%s" recv task stopped' % self.uname)
                 self.raise_exception()
                 break
 
-            logging.info('"%s" recieved \'%s\'' % (self.uname, msg))
-            asyncio.create_task(m_parser.parse_message(self.uname, msg))
+            logging.info('"%s" recieved \'%s\'' % (self.session, msg))
+            asyncio.create_task(m_parser.parse_message(self.session, msg))
+
+        logging.info('"%s" recv task stopped' % self.session)
 
     async def close(self):
-        self.closing = True # No need to run this multiple times
+        self.closing = True # Will stop connection process if no ws exists
         await self.close_ws()
         # Ensure all workers close
-        q_manager.kill(self.uname)
+        q_manager.put(self.session, KILL)
 
     async def close_ws(self):
         try:
@@ -146,10 +166,11 @@ class Session:
             self.raise_exception()
 
     def raise_exception(self):
-        logging.debug('"%s" raised exception' % self.uname, exc_info=True)
+        logging.debug('"%s" raised exception' % self.session, exc_info=True)
             
 
 __instance = SessionManager()
+
 
 if __name__ == '__main__':
     import asyncio
